@@ -36,8 +36,8 @@ main = do
 
 redo :: String -> IO ()
 redo target = do
-   upToDate' <- upToDate metaDepsDir
-   unless upToDate' $ maybe missingDo redo' =<< redoPath target
+   upToDate' <- upToDate target
+   unless upToDate' $ maybe missingDo redo' =<< doPath target
  where redo' :: FilePath -> IO ()
        redo' path = do
          catchJust (guard . isDoesNotExistError)
@@ -58,23 +58,30 @@ redo target = do
        missingDo = do
          exists <- doesFileExist target
          unless exists $ error $ "No .do file found for target '" ++ target ++ "'"
-       cmd path = unwords ["sh", path ,"0", takeBaseName target, tmp ,">", tmp]
+       cmd path = unwords ["sh -x", path ,"0", takeBaseName target, tmp ,">", tmp]
        metaDepsDir = metaDir </> target
 
-redoPath :: FilePath -> IO (Maybe FilePath)
-redoPath target = listToMaybe `liftM` filterM doesFileExist candidates
+doPath :: FilePath -> IO (Maybe FilePath)
+doPath target = listToMaybe `liftM` filterM doesFileExist candidates
     where candidates = ( target ++ ".do" ) : [replaceBaseName target "default" ++ ".do" | hasExtension target]
 
 upToDate :: FilePath -> IO Bool
-upToDate metaDepsDir = catch
-    (do deps <- getDirectoryContents metaDepsDir
-        (traceShow' . and) `liftM` mapM depUpToDate deps)
+upToDate target = catch
+    (do exists <- doesFileExist target
+        if exists
+        then do deps <- getDirectoryContents (metaDir </> target)
+                (traceShow' . and) `liftM` mapM depUpToDate deps
+        else return False)
     (\(_ :: IOException) -> return False)
  where depUpToDate :: FilePath -> IO Bool
        depUpToDate dep = catch 
-           (do oldMD5 <- map toLower `liftM` withFile (metaDepsDir </> dep) ReadMode hGetLine
+           (do oldMD5 <- map toLower `liftM` withFile (metaDir </> target </> dep) ReadMode hGetLine
                newMD5 <- md5' dep
-               return $ oldMD5 == newMD5)
+               doScript <- doPath dep
+               case doScript of
+                 Nothing -> return $ oldMD5 == newMD5
+                 Just _ -> do upToDate' <- upToDate dep
+                              return $ (oldMD5 == newMD5) && upToDate')
            (\ e -> return (ioeGetErrorType e == InappropriateType))
 
 
